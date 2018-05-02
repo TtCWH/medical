@@ -10,7 +10,25 @@ import pandas as pd
 import numpy as np
 
 
-def store_data(flag="train",maxlen=500):
+def cal_data(flag="train",maxlen=0):
+	if not os.path.exists("data/{}data.json".format(flag)):
+		print("{}data has not existed!".format(flag))
+		return
+	res=0
+	with open("data/{}data.json".format(flag)) as f:
+		for _ in f.readlines():
+			_=json.loads(_)
+			vals=list(_.values())[0]
+			kind=[]
+			descrip=[]
+			for i in range(387):
+				if len(vals[str(i)])<=maxlen:
+					continue
+				else:
+					res+=1
+	print(res)
+
+def store_data(flag="train",maxlen=100):
 	if not os.path.exists("data/{}data.json".format(flag)):
 		print("{}data has not existed!".format(flag))
 		return
@@ -59,6 +77,22 @@ def get_data(batchsize,kind_size,seq_length,flag="train",shuffle=True):
 				yield kind,desc,y
 			else:
 				yield kind,desc
+		start_index+=batchsize
+		sub_list=indices[start_index:len(lines)]
+		kind=np.zeros((len(lines)-start_index,kind_size)).astype('int32')
+		desc=np.zeros((len(lines)-start_index,kind_size,seq_length)).astype('int32')
+		if flag=="train":
+			y=np.zeros((len(lines)-start_index,5)).astype('float32')
+		for i,index in enumerate(sub_list):
+			_=json.loads(lines[index])
+			kind[i,]=_[0]
+			desc[i,]=_[1]
+			if flag=="train":
+				y[i,]=_[2]
+		if flag=="train":
+			yield kind,desc,y
+		else:
+			yield kind,desc
 	
 
 def get_test_data(flag="test"):
@@ -242,13 +276,13 @@ class Preprocess(object):
 		"""把数据集数字化"""
 		kind2id={}
 		vocab={}
-		if not os.path.exists("{}/kinds2id.txt".format(self.folder)):
+		if not os.path.exists("{}/kinds_id.txt".format(self.folder)):
 			print("kinds2id has not existed!")
 			return
 		if not os.path.exists("{}/vocab_id.txt".format(self.folder)):
 			print("vocab2id has not existed!")
 			return
-		with open("{}/kinds2id.txt".format(self.folder)) as f:
+		with open("{}/kinds_id.txt".format(self.folder)) as f:
 			for _ in  f.readlines():
 				_=_.split()
 				kind2id[_[0]]=int(_[1])
@@ -311,7 +345,7 @@ class Preprocess(object):
 
 
 if __name__=="__main__":
-	a,b=get_data(50,387,500)
+	#a,b=get_data(50,387,500)
 	#prep=Preprocess()
 	#prep.kind_id()
 	# prep.count_vocab()
@@ -319,5 +353,6 @@ if __name__=="__main__":
 	# prep.word_id("test_set.csv","test")
 	# vocab={}
 	# prep.deal_x("19x13mm",vocab)
-	#get_data('train')
+	get_data(file='test')
+	#cal_data()
 

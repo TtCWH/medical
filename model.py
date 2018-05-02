@@ -1,8 +1,11 @@
 # -*- encoding:utf-8 -*-
 __author__ = 'Han Wang/Xuan Hua'
+import os
 import pdb
 import tensorflow as tf
-from tensorflow.contrib.rnn import LSTMCell
+from tensorflow.contrib.rnn import LSTMCell,GRUCell
+os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 
 
 class Model(object):
@@ -51,6 +54,8 @@ class Model(object):
         if is_training and keep_prob < 1.0:
             kind_embedding_output = tf.nn.dropout(kind_embedding_output, keep_prob)
             word_embedding_output = tf.nn.dropout(word_embedding_output, keep_prob)
+        kind_embedding_output=tf.layers.batch_normalization(kind_embedding_output, training=is_training)
+        word_embedding_output=tf.layers.batch_normalization(word_embedding_output, training=is_training)
         #kind_embedding_output = tf.unstack(kind_embedding_output, axis=0)
 
         # sequence embedding layer
@@ -60,29 +65,29 @@ class Model(object):
             # pdb.set_trace()
             word_embedding_output=tf.reshape(word_embedding_output,shape=[-1,word_embedding_output.shape[-2],word_embedding_output.shape[-1]])
             bilstm_input = tf.unstack(word_embedding_output, axis=1)
-            forward_LSTM = LSTMCell(lstm_dim / 2, initializer=tf.random_uniform_initializer(-0.01, 0.01),
-                                    forget_bias=0.0)
-            backward_LSTM = LSTMCell(lstm_dim / 2, initializer=tf.random_uniform_initializer(-0.01, 0.01),
-                                     forget_bias=0.0)
+            forward_LSTM = GRUCell(lstm_dim, kernel_initializer=tf.random_uniform_initializer(-0.01, 0.01),
+                                    bias_initializer=tf.zeros_initializer())
+            backward_LSTM = GRUCell(lstm_dim, kernel_initializer=tf.random_uniform_initializer(-0.01, 0.01),
+                                    bias_initializer=tf.zeros_initializer())
             biLSTM_output = tf.contrib.rnn.static_bidirectional_rnn(forward_LSTM, backward_LSTM, bilstm_input, dtype=tf.float32)[0]
             biLSTM_output = tf.stack(biLSTM_output, axis=1)
-            biLSTM_output=tf.reshape(biLSTM_output,shape=[-1,kind_size,seq_length,embedding_dim])
+            biLSTM_output=tf.reshape(biLSTM_output,shape=[-1,kind_size,seq_length,lstm_dim*2])
             #biLSTM_output = tf.unstack(biLSTM_output, axis=0)
 
         # attention layer
         """output_tensor=[batchsize,kind_size,300]"""
         print("attention")
         with tf.variable_scope('Attention'):
-            attention_M1 = tf.get_variable('attention_matrix1', [embedding_dim, embedding_dim],
+            attention_M1 = tf.get_variable('attention_matrix1', [embedding_dim, lstm_dim*2],
                                           initializer=tf.random_uniform_initializer(-0.01, 0.01), dtype=tf.float32)
             attention_M2 = tf.get_variable('attention_matrix2', [1, seq_length],
                                           initializer=tf.random_uniform_initializer(-0.01, 0.01), dtype=tf.float32)
             kind_embedding_output=tf.reshape(kind_embedding_output,shape=[-1,embedding_dim])
             temp=tf.matmul(kind_embedding_output,attention_M1)
             temp=tf.reshape(tf.expand_dims(temp,axis=-1),shape=[-1,1])
-            attention=tf.nn.relu(tf.reshape(tf.matmul(temp,attention_M2),shape=[-1,kind_size,seq_length,embedding_dim])*biLSTM_output)
+            attention=tf.nn.relu(tf.reshape(tf.matmul(temp,attention_M2),shape=[-1,kind_size,seq_length,lstm_dim*2])*biLSTM_output)
             attention_output = attention*biLSTM_output
-            self.attention_output = attention_output = tf.reduce_mean(attention_output,axis=-2)
+            self.attention_output = attention_output = tf.layers.batch_normalization(tf.reduce_mean(attention_output,axis=-2), training=is_training)
 #             a = []
 #             # pdb.set_trace()
 #             for per1, per2 in zip(kind_embedding_output, biLSTM_output):
@@ -100,8 +105,8 @@ class Model(object):
         '''特征提取 卷积'''
         print("CNN")
         with tf.variable_scope('conv1'):
-            kernel1 = tf.Variable(tf.glorot_normal_initializer()([5, lstm_dim, 64]))
-            bias1 = tf.Variable(tf.zeros_initializer()([64]))
+            kernel1 = tf.get_variable('kernel1',[5, lstm_dim*2, 64],initializer=tf.glorot_normal_initializer(), dtype=tf.float32)
+            bias1 = tf.get_variable('kernel2',[64],initializer=tf.zeros_initializer(), dtype=tf.float32)
             conv1 = tf.nn.relu(tf.nn.conv1d(self.attention_output, kernel1, 1, 'VALID') + bias1)
 
         with tf.variable_scope('maxpool1'):
@@ -119,8 +124,8 @@ class Model(object):
 
         '''fully connection'''
         with tf.variable_scope('fc1'):
-            weight1 = tf.Variable(tf.glorot_normal_initializer()([(kind_size - 4) // 2 * 64, 512]))
-            bias6 = tf.Variable(tf.zeros_initializer()([512]))
+            weight1 = tf.get_variable('weight1',[(kind_size - 4) // 2 * 64, 512],initializer=tf.glorot_normal_initializer(), dtype=tf.float32)
+            bias6 = tf.get_variable('bias6',[512],initializer=tf.zeros_initializer(), dtype=tf.float32)
             fc1 = tf.nn.relu(tf.matmul(flatten, weight1) + bias6)
 
         dropout1 = tf.nn.dropout(fc1, cnn_fc_keep_prob)
@@ -133,8 +138,8 @@ class Model(object):
  #       dropout2 = tf.nn.dropout(fc2, cnn_fc_keep_prob)
 
         with tf.variable_scope('fc2'):
-            weight2 = tf.Variable(tf.glorot_normal_initializer()([512, 5]))
-            bias8 = tf.Variable(tf.zeros_initializer()([5]))
+            weight2 = tf.get_variable('weight2',[512, 5],initializer=tf.glorot_normal_initializer(), dtype=tf.float32)
+            bias8 = tf.get_variable('bias8',[5],initializer=tf.zeros_initializer(), dtype=tf.float32)
 
         self._result = tf.nn.relu(tf.matmul(dropout1, weight2) + bias8)
 
@@ -152,7 +157,9 @@ class Model(object):
         learning_rate = tf.train.exponential_decay(init_lr, global_step, epochs*100, 0.98, staircase=True)
 
         optimizer=tf.train.RMSPropOptimizer(learning_rate)
-        self._train_op=optimizer.minimize(loss)
+        update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+        with tf.control_dependencies(update_ops):
+            self._train_op=optimizer.minimize(loss)
 
 
     '''池化'''
